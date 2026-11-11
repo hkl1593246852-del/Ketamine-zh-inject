@@ -1,0 +1,82 @@
+name: Inject zh-Hans
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-path
+
+      - name: Install tools
+        run: |
+          brew install ldid 2>/dev/null || true
+          # insert_dylib 用来给 Mach-O 加 LC_LOAD_DYLIB
+          brew tap conradev/insert_dylib 2>/dev/null || true
+          brew install insert_dylib 2>/dev/null || true
+          which insert_dylib || echo "insert_dylib missing, will fall back to python"
+
+      - name: Download original IPA
+        run: |
+          curl -L --retry 3 -o keta21b1.ipa https://withered.live/ipa/keta21b1.ipa
+          ls -la keta21b1.ipa
+          unzip -l keta21b1.ipa | head -20
+
+      - name: Compile dylib
+        run: |
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          clang -dynamiclib \
+            -target arm64-apple-ios15.0 \
+            -isysroot "$SDK" \
+            -fobjc-arc -O2 \
+            -framework UIKit -framework Foundation \
+            -install_name @executable_path/Frameworks/KetamineZH.dylib \
+            inject/KetamineZH.m \
+            -o KetamineZH.dylib
+          ls -la KetamineZH.dylib
+          otool -L KetamineZH.dylib || true
+
+      - name: Repack + inject
+        run: |
+          rm -rf work && mkdir work && cd work
+          unzip -q ../keta21b1.ipa
+          APP="Payload/Ketamine.app"
+          BIN="$APP/Ketamine"
+          mkdir -p "$APP/Frameworks"
+          cp ../KetamineZH.dylib "$APP/Frameworks/"
+          chmod +x "$BIN"
+          if command -v insert_dylib >/dev/null 2>&1; then
+            insert_dylib --inplace --codesign _CodeSignature \
+              @executable_path/Frameworks/KetamineZH.dylib "$BIN"
+          else
+            echo "insert_dylib 缺失"; exit 1
+          fi
+          otool -L "$BIN" | head -10
+          rm -rf "$APP/_CodeSignature"
+          if command -v ldid >/dev/null 2>&1; then
+            ldid -S "$BIN"
+            ldid -S "$APP/Frameworks/KetamineZH.dylib"
+          fi
+
+      - name: Zip
+        run: |
+          cd work
+          zip -qry ../Ketamine-zh-injected.ipa Payload
+          cd ..
+          ls -la Ketamine-zh-injected.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Ketamine-zh-injected
+          path: Ketamine-zh-injected.ipa
+          retention-days: 30
