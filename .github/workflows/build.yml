@@ -41,7 +41,7 @@ jobs:
             -fobjc-arc -O2 \
             -framework UIKit -framework Foundation \
             -install_name @executable_path/Frameworks/KetamineZH.dylib \
-            inject/KetamineZH.m \
+            KetamineZH.m \
             -o KetamineZH.dylib
           ls -la KetamineZH.dylib
           otool -L KetamineZH.dylib || true
