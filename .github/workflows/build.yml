@@ -9,28 +9,13 @@ jobs:
   build:
     runs-on: macos-latest
     timeout-minutes: 30
-
     steps:
       - uses: actions/checkout@v4
-
-      - name: Toolchain
-        run: |
-          xcodebuild -version
-          xcrun --sdk iphoneos --show-sdk-path
-
-      - name: Install tools
-        run: |
-          brew install ldid 2>/dev/null || true
-          # insert_dylib 用来给 Mach-O 加 LC_LOAD_DYLIB
-          brew tap conradev/insert_dylib 2>/dev/null || true
-          brew install insert_dylib 2>/dev/null || true
-          which insert_dylib || echo "insert_dylib missing, will fall back to python"
 
       - name: Download original IPA
         run: |
           curl -L --retry 3 -o keta21b1.ipa https://withered.live/ipa/keta21b1.ipa
           ls -la keta21b1.ipa
-          unzip -l keta21b1.ipa | head -20
 
       - name: Compile dylib
         run: |
@@ -44,9 +29,9 @@ jobs:
             KetamineZH.m \
             -o KetamineZH.dylib
           ls -la KetamineZH.dylib
-          otool -L KetamineZH.dylib || true
+          otool -L KetamineZH.dylib
 
-      - name: Repack + inject
+      - name: Inject
         run: |
           rm -rf work && mkdir work && cd work
           unzip -q ../keta21b1.ipa
@@ -55,17 +40,21 @@ jobs:
           mkdir -p "$APP/Frameworks"
           cp ../KetamineZH.dylib "$APP/Frameworks/"
           chmod +x "$BIN"
-          if command -v insert_dylib >/dev/null 2>&1; then
-            insert_dylib --inplace --codesign _CodeSignature \
-              @executable_path/Frameworks/KetamineZH.dylib "$BIN"
-          else
-            echo "insert_dylib 缺失"; exit 1
-          fi
-          otool -L "$BIN" | head -10
-          rm -rf "$APP/_CodeSignature"
+          python3 ../inject_dylib.py "$BIN" "@executable_path/Frameworks/KetamineZH.dylib"
+          otool -L "$BIN" | head -12
+          rm -rf "$APP/_CodeSignature" "$APP/embedded.mobileprovision"
+          cd ..
+
+      - name: Sign
+        run: |
+          cd work
+          brew install ldid 2>/dev/null || true
           if command -v ldid >/dev/null 2>&1; then
-            ldid -S "$BIN"
-            ldid -S "$APP/Frameworks/KetamineZH.dylib"
+            ldid -S "Payload/Ketamine.app/Ketamine"
+            ldid -S "Payload/Ketamine.app/Frameworks/KetamineZH.dylib"
+            echo "signed"
+          else
+            echo "ldid missing, unsigned (TrollStore will sign)"
           fi
 
       - name: Zip
@@ -74,6 +63,7 @@ jobs:
           zip -qry ../Ketamine-zh-injected.ipa Payload
           cd ..
           ls -la Ketamine-zh-injected.ipa
+          unzip -l Ketamine-zh-injected.ipa | grep -E "Frameworks|lproj" || true
 
       - uses: actions/upload-artifact@v4
         with:
